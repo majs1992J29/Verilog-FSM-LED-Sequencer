@@ -1,61 +1,97 @@
 # Verilog FSM LED Sequencer
 
-An FPGA-based LED sequencer implemented in **Verilog HDL**, combining finite state machines (FSMs), programmable timing, and button-controlled speed adjustment to produce a bidirectional running-light effect.
+A configurable eight-LED running-light controller implemented in **Verilog HDL** for the **Terasic DE2-115 FPGA board**. Unlike a shift-register-based sequencer, this design uses a **fourteen-state finite-state machine (FSM)** to generate the LED pattern, together with a **Mealy FSM** and counters for button-controlled timing.
 
-The design targets the **Terasic DE2-115** development board and was developed using **Intel/Altera Quartus**, with functional simulation in **ModelSim**.
+The design was developed using **Intel/Altera Quartus**, simulated in **ModelSim**, and tested on the DE2-115 according to the original verification report.
 
 ## Features
 
-- Eight-LED back-and-forth ("Knight Rider") lighting sequence.
-- State-driven LED patterns with a **14-state FSM**.
-- Adjustable sequence timing through a variable-count divider.
-- Button-driven control implemented with a **Mealy FSM** and a saturating up/down counter.
-- Selectable fixed or adjustable divider range.
-- Separate green LED pattern and red LED status outputs.
-- Testbenches covering the LED FSM, speed regulator, and integrated design.
+- **Fourteen-state LED FSM:** produces a single illuminated LED moving back and forth across eight outputs.
+- **Variable sequence speed:** a programmable timing stage determines when the LED FSM advances.
+- **Button-controlled speed setting:** KEY1 decreases and KEY2 increases the four-bit setting in the original active-low button convention.
+- **Mealy control FSM:** detects button actions and generates counter enable/direction signals.
+- **Selectable timing mode:** chooses between the full divider range and the programmable terminal-count setting.
+- **Status outputs:** eight green LEDs show the sequence; eight red LEDs show timing and speed-control counts.
 
 ## Architecture
 
-The top-level module, `Juego_de_luces_con_velocidad_variable`, connects the timing, speed-control, and LED-sequencing blocks:
-
 ```mermaid
 flowchart TD
-    CLK[Clock / Reset / Enable] --> BASE["count_param<br/>Base timing counter"]
-    BASE -->|Terminal count| DIV["contador_variable<br/>Variable timing counter"]
-    KEY["Key1 / Key2"] --> SPEED["Speed_Regulator"]
-    SPEED -->|4-bit setting| DIV
-    MODE["Mode"] --> DIV
-    DIV -->|Terminal count| LED["FSM_luces_kit_medveded<br/>14-state LED pattern FSM"]
-    LED --> GREEN["oLEDG[7:0]<br/>Green LED sequence"]
-    DIV --> REDHI["oLEDR[7:4]<br/>Divider count"]
-    SPEED --> REDLO["oLEDR[3:0]<br/>Speed setting"]
+    CLK[Clock / reset] --> BASE[count_param: base counter]
+    EN[Global enable] --> BASE
+    BASE -->|Terminal count| DIV[contador_variable: programmable timing]
+    MODE[Mode input] --> DIV
+    K[KEY1 / KEY2] --> REG[Speed_Regulator]
+    REG -->|Four-bit speed setting| DIV
+    DIV -->|Advance pulse| FSM[FSM_luces_kit_medveded: 14-state FSM]
+    FSM --> GREEN[oLEDG: green LED sequence]
+    DIV --> REDH[oLEDR 7:4: divider count]
+    REG --> REDL[oLEDR 3:0: speed setting]
 ```
 
-Inside `Speed_Regulator`, `FSM_speed_MEALY` interprets the button inputs and generates enable/direction signals for `count_UP_DOWN`. The resulting 4-bit setting controls `contador_variable` when its variable-range mode is selected.
+The top-level entity, **`Juego_de_luces_con_velocidad_variable`**, connects the counter, speed regulator, programmable divider, and LED-state machine. Inside `Speed_Regulator`, **`FSM_speed_MEALY`** controls a saturating four-bit **`count_UP_DOWN`** counter. The resulting speed setting is used by `contador_variable` when the corresponding mode is selected.
 
-### LED pattern
+### LED sequence
 
-The LED-pattern FSM lights one of eight outputs at a time, moving from one end to the other and back. A new pattern state is selected only when its enable signal is asserted.
+The FSM moves through fourteen states, illuminating the LEDs in the following order:
 
 ```text
-10000000
-01000000
-00100000
-00010000
-00001000
-00000100
-00000010
-00000001
-00000010
-00000100
-00001000
-00010000
-00100000
-01000000
-(repeat)
+10000000 → 01000000 → 00100000 → 00010000
+         → 00001000 → 00000100 → 00000010 → 00000001
+         → 00000010 → 00000100 → 00001000 → 00010000
+         → 00100000 → 01000000 → repeat
 ```
 
-## Repository structure
+The state advances only when its enable input is asserted. Reset returns it to the first pattern.
+
+## RTL modules
+
+| Module | Responsibility |
+| --- | --- |
+| [`Juego_de_luces_con_velocidad_variable.v`](rtl/Juego_de_luces_con_velocidad_variable.v) | Integrates the complete LED sequencer. |
+| [`FSM_luces_kit_medveded.v`](rtl/FSM_luces_kit_medveded.v) | Generates the fourteen-state LED pattern. |
+| [`Speed_Regulator.v`](rtl/Speed_Regulator.v) | Connects the button FSM to the speed-setting counter. |
+| [`FSM_speed_MEALY.v`](rtl/FSM_speed_MEALY.v) | Decodes button actions into counter enable and direction signals. |
+| [`count_UP_DOWN.v`](rtl/count_UP_DOWN.v) | Saturating up/down speed-setting counter (0–15). |
+| [`contador_variable.v`](rtl/contador_variable.v) | Variable timing stage with selectable terminal count. |
+| [`count_param.v`](rtl/count_param.v) | Base clock counter and terminal-count generation. |
+
+## Top-level interface
+
+| Signal | Direction | Description |
+| --- | --- | --- |
+| `iCLK` | Input | System clock. |
+| `iRST` | Input | Active-low reset. |
+| `iENABLE` | Input | Enables the base timing stage. |
+| `iModo` | Input | Selects variable terminal count (`1`) or full four-bit count range (`0`). |
+| `iKey1` | Input | Speed decrease button in the original active-low hardware configuration. |
+| `iKey2` | Input | Speed increase button in the original active-low hardware configuration. |
+| `oLEDG[7:0]` | Output | Running-light sequence. |
+| `oLEDR[7:4]` | Output | Current variable-counter value. |
+| `oLEDR[3:0]` | Output | Speed-control setting. |
+
+## Simulation and original verification
+
+| Testbench | Covered behavior |
+| --- | --- |
+| [`tb_FSM_Medveded.v`](tb/tb_FSM_Medveded.v) | Normal fourteen-state sequence, enable hold, and reset. |
+| [`tb_Speed_Regulator.v`](tb/tb_Speed_Regulator.v) | Button increments/decrements, simultaneous-button handling, count limits, and reset. |
+| [`tb_Juego_de_luces_con_velocidad_variable.v`](tb/tb_Juego_de_luces_con_velocidad_variable.v) | Integrated sequence with timing changes. |
+
+The original ModelSim verification covered the individual FSM, the regulator, and the combined system. The hardware validation on the DE2-115 checked **constant-speed mode**, button-controlled speed changes, and reset.
+
+**Simulation considerations:** These are primarily stimulus-driven testbenches; they are not a complete automated assertion suite. The integrated testbench includes very long `repeat (500000000)` waits, so a full run can be slow. Its simulated button levels should be reviewed alongside the **active-low KEY convention** used by the hardware before interpreting speed-change results.
+
+## Hardware and tools
+
+| Item | Details |
+| --- | --- |
+| FPGA development board | Terasic DE2-115 |
+| HDL | Verilog |
+| FPGA design | Intel/Altera Quartus |
+| Functional simulation | ModelSim |
+
+## Repository layout
 
 ```text
 Verilog-FSM-LED-Sequencer/
@@ -74,62 +110,8 @@ Verilog-FSM-LED-Sequencer/
 └── README.md
 ```
 
-## RTL modules
+## Reusing the design
 
-| Module | Purpose |
-| --- | --- |
-| `Juego_de_luces_con_velocidad_variable` | Top-level integration of timing, speed regulation, and LED sequencing. |
-| `FSM_luces_kit_medveded` | Fourteen-state FSM that produces the back-and-forth eight-LED pattern. |
-| `Speed_Regulator` | Combines button-event control with a 4-bit up/down speed-setting counter. |
-| `FSM_speed_MEALY` | Four-state Mealy-style controller generating counter enable and direction signals from two button inputs. |
-| `count_UP_DOWN` | Parameterized, saturating up/down counter; instantiated with a range of 0–15. |
-| `contador_variable` | Timing counter that resets at a selected terminal value, determined by the mode input. |
-| `count_param` | Parameterized base timing counter that generates a terminal-count pulse. |
+Create a Quartus project for the DE2-115, add the seven RTL files, select **`Juego_de_luces_con_velocidad_variable`** as the top-level entity, and restore the relevant clock, buttons, switches, reset, and LED pin assignments. For ModelSim verification, compile the required RTL modules with the selected testbench.
 
-## Top-level interface
-
-**Module:** `Juego_de_luces_con_velocidad_variable`
-
-| Port | Direction | Description |
-| --- | --- | --- |
-| `iCLK` | Input | System clock. |
-| `iRST` | Input | Active-low reset for the integrated design. |
-| `iENABLE` | Input | Enables the base timing counter. |
-| `iModo` | Input | Selects the variable counter's terminal-count mode (`1`: speed setting; `0`: full 4-bit range). |
-| `iKey1`, `iKey2` | Input | Button inputs used by the speed-control FSM. |
-| `oLEDG[7:0]` | Output | Eight-bit running-light pattern. |
-| `oLEDR[7:4]` | Output | Current count of the variable timing stage. |
-| `oLEDR[3:0]` | Output | Four-bit speed setting. |
-
-> **Button mapping note:** The original source comments and the `FSM_speed_MEALY` state/output logic do not consistently describe which button increments or decrements the setting. Verify the mapping against the RTL and simulation waveforms before relying on specific button assignments.
-
-## Simulation and verification
-
-The repository includes three testbenches originally used for functional verification in **ModelSim**:
-
-| Testbench | Coverage |
-| --- | --- |
-| `tb_FSM_Medveded.v` | Normal LED sequencing, disabled state progression, and reset. |
-| `tb_Speed_Regulator.v` | Button-input sequences, repeated changes, special input combinations, and reset. |
-| `tb_Juego_de_luces_con_velocidad_variable.v` | Integrated LED sequence with button-driven timing changes. |
-
-To simulate, compile the required files from `rtl/` together with the chosen testbench from `tb/`, select that testbench as the simulation top, and inspect the resulting waveforms.
-
-**Simulation notes:**
-
-- The testbenches are primarily **stimulus-driven**, with waveform inspection rather than automated self-checking assertions.
-- The integrated testbench contains very long waits (`repeat (500000000)`), so a full simulation can take substantial time.
-- The base timing counter defaults to `fin_cuenta = 5000000`; consider simulation-only parameter overrides or a reduced test configuration for faster experiments, without changing the original archived RTL.
-
-## Hardware and tools
-
-- **Target board:** Terasic DE2-115 FPGA development board.
-- **HDL:** Verilog.
-- **Design environment:** Intel/Altera Quartus.
-- **Functional simulation:** ModelSim.
-
-## Scope
-
-This repository contains the original **Verilog RTL source files and testbenches** for the LED sequencer. Generated Quartus databases, compiled programming files, pin assignments, and full project configurations are intentionally excluded.
-
-To rebuild the design for the DE2-115, create a Quartus project, add the RTL sources, select the top-level module, and configure the FPGA device and board pin assignments.
+**Scope:** This repository preserves the Verilog sources and testbenches of the **LED-sequencer portion** of the original work. It does not include the separate stepper-motor controller described in the larger design report, or the original Quartus project files and generated bitstreams. The historical validation results are documented; the sources have not been rerun for this README revision.
